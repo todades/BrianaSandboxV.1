@@ -1,0 +1,6 @@
+node_modules/
+dist/
+.env
+data/admin-auth.json
+data/briana.sqlite*
+npm-debug.log*

@@ -12,10 +12,10 @@ CREATE TABLE users (
   password_hash TEXT NOT NULL,
   rol TEXT NOT NULL DEFAULT 'estudiante'
     CHECK (rol IN ('estudiante', 'tutor', 'administrador')),
-  activo INTEGER NOT NULL DEFAULT 1 CHECK (activo IN (0, 1)),
-  CHECK (rol <> 'estudiante' OR trayecto IS NOT NULL),
+ activo INTEGER NOT NULL DEFAULT 1 CHECK (activo IN (0, 1)),
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CHECK (rol <> 'estudiante' OR trayecto IS NOT NULL)
 );
 
 CREATE UNIQUE INDEX idx_users_cedula ON users(cedula);

@@ -69,10 +69,11 @@ function createUsersTable() {
       password_hash TEXT NOT NULL,
       rol TEXT NOT NULL DEFAULT 'estudiante'
         CHECK (rol IN ('estudiante','tutor','administrador')),
-      CHECK (rol <> 'estudiante' OR trayecto IS NOT NULL),
       activo INTEGER NOT NULL DEFAULT 1 CHECK (activo IN (0,1)),
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      -- Las restricciones de tabla deben ir después de todas las columnas.
+      CHECK (rol <> 'estudiante' OR trayecto IS NOT NULL)
     );
     CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_users_cedula ON users(cedula);

@@ -80,14 +80,19 @@ await seedAdmin();
 
 app.set('trust proxy', 1);
 app.use(helmet({ contentSecurityPolicy: false }));
+
+// ---------- Solución CORS actualizada ----------
 app.use(cors({
-  origin(origin, callback) {
-    const allowed = String(process.env.FRONTEND_ORIGINS || '').split(',').map(v => v.trim()).filter(Boolean);
-    callback(!origin || !allowed.length || allowed.includes(origin) ? null : new Error('Origen no autorizado.'), true);
-  },
+  origin: [
+    'http://localhost:3000',
+    'http://localhost:5173',
+    'https://brianacdb.netlify.app',
+  ],
   methods: ['GET','POST','PUT','PATCH','DELETE'],
   allowedHeaders: ['Content-Type','Authorization'],
 }));
+// ----------------------------------------------
+
 app.use(express.json({ limit: '256kb' }));
 
 const authLimiter = rateLimit({ windowMs: 15 * 60_000, limit: 15, message: { message: 'Demasiados intentos.' } });

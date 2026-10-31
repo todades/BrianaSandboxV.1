@@ -162,23 +162,7 @@ await seedAdmin();
 // ---------- Middlewares ----------
 app.set('trust proxy', 1);
 app.use(helmet({ contentSecurityPolicy: false }));
-<<<<<<< HEAD
 app.use(cors({ origin: true, methods: ['GET','POST','PUT','PATCH','DELETE'], allowedHeaders: ['Content-Type','Authorization'] }));
-=======
-
-// ---------- Solución CORS actualizada ----------
-app.use(cors({
-  origin: [
-    'http://localhost:3000',
-    'http://localhost:5173',
-    'https://brianacdb.netlify.app',
-  ],
-  methods: ['GET','POST','PUT','PATCH','DELETE'],
-  allowedHeaders: ['Content-Type','Authorization'],
-}));
-// ----------------------------------------------
-
->>>>>>> f30e0f4d90259bfb99a0416d387aaef4f02e2286
 app.use(express.json({ limit: '256kb' }));
 
 const authLimiter = rateLimit({ windowMs: 15 * 60_000, limit: 30, message: { message: 'Demasiados intentos.' } });
@@ -498,7 +482,6 @@ app.post('/api/ai/analyze', authLimiter, requireAuth, async (req, res) => {
 // ---------- Frontend ----------
 const distDir = path.join(__dirname, 'dist');
 app.use(express.static(distDir));
-<<<<<<< HEAD
 app.get('/', (_req, res) => res.sendFile(path.join(distDir, 'index.html')));
 app.use('/api', (_req, res) => res.status(404).json({ message: 'Ruta no encontrada.' }));
 app.use((error, _req, res, _next) => {
@@ -508,8 +491,3 @@ app.use((error, _req, res, _next) => {
 });
 
 app.listen(port, () => process.stdout.write(`BRIANA activo en http://localhost:${port}\n`));
-=======
-app.get('/',(_req,res)=>res.sendFile(path.join(distDir,'index.html')));
-app.use((_err,_req,res,_next)=>res.status(500).json({message:'Error interno.'}));
-app.listen(port,()=>process.stdout.write(`BRIANA activo en http://localhost:${port}\n`));
->>>>>>> f30e0f4d90259bfb99a0416d387aaef4f02e2286

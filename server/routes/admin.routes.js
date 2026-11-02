@@ -1,339 +1,312 @@
 import { Router } from 'express';
-import {
-  FINAL_STATES,
-  PROJECT_STATES,
-  ROLES,
-  assertTransition,
-} from '../domain/project-state-machine.js';
-import {
-  auditProject,
-  parseAuthors,
-  projectById,
-  sendRouteError,
-  serializeProject,
-} from '../lib/project-helpers.js';
-import {
-  currentDocument,
-  removeTemporaryFile,
-  sendPrivateDocument,
-  storeProjectDocument,
-} from '../lib/documents.js';
+import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
+import { db } from '../lib/db.js';
+import { requireAdmin } from '../middleware/requireAdmin.js';
 
-export function createAdminRouter({
-  db,
-  verifyRole,
-  upload,
-  dataDir,
-  documentsDir,
-}) {
-  const router = Router();
-  router.use(verifyRole(ROLES.ADMIN));
+const router = Router();
 
-  router.get('/projects', (_request, response) => {
-    const projects = db.prepare(`
-      SELECT p.*, s.nombre AS estudiante_nombre, t.nombre AS tutor_asignado_nombre
+// ============================================================
+// 1. LOGIN DE ADMINISTRADOR (público, SOLO acepta rol administrador)
+//    Es el "acceso especial/protegido" para el admin único.
+//    Los estudiantes/tutores NO pueden entrar por aquí.
+// ============================================================
+router.post('/login', async (req, res) => {
+  try {
+    const email = String(req.body.email || '').trim().toLowerCase();
+    const password = String(req.body.password || '');
+
+    const user = await db
+      .prepare('SELECT * FROM users WHERE email = ? AND is_active = TRUE')
+      .get(email);
+
+    if (!user || !(await bcrypt.compare(password, user.password_hash))) {
+      return res.status(401).json({ message: 'Credenciales incorrectas.' });
+    }
+
+    // Solo el administrador puede iniciar sesión por este acceso.
+    if (user.rol !== 'administrador') {
+      return res.status(403).json({
+        message: 'Este acceso es exclusivo para el administrador. Usa el inicio de sesión público.',
+      });
+    }
+
+    const token = jwt.sign({ sub: String(user.id), role: user.rol }, process.env.JWT_SECRET, {
+      expiresIn: process.env.JWT_EXPIRES_IN || '8h',
+      issuer: 'briana-api',
+      audience: 'briana-panel',
+    });
+
+    res.json({
+      token,
+      user: { id: user.id, nombre: user.nombre, email: user.email, rol: user.rol },
+    });
+  } catch (err) {
+    console.error('Error en admin login:', err);
+    res.status(500).json({ message: 'Error interno al iniciar sesión de administrador.' });
+  }
+});
+
+// ============================================================
+// A PARTIR DE AQUÍ, TODAS LAS RUTAS REQUIEREN ROL ADMINISTRADOR
+// ============================================================
+router.use(requireAdmin);
+
+// ============================================================
+// MÉTRICAS / DASHBOARD
+// ============================================================
+router.get('/dashboard', async (req, res) => {
+  try {
+    const totalProyectos = (await db.prepare('SELECT COUNT(*) c FROM projects').get()).c;
+    const porEstado = (await db.prepare('SELECT estado, COUNT(*) c FROM projects GROUP BY estado').all());
+    const mapa = {};
+    porEstado.forEach((r) => (mapa[r.estado] = r.c));
+
+    const tutoresActivos = (
+      await db.prepare("SELECT COUNT(*) c FROM users WHERE rol = 'tutor' AND is_active = TRUE").get()
+    ).c;
+    const estudiantesActivos = (
+      await db.prepare("SELECT COUNT(*) c FROM users WHERE rol = 'estudiante' AND is_active = TRUE").get()
+    ).c;
+
+    res.json({
+      totalProyectos,
+      porEstado: {
+        publicado: mapa['publicado'] || 0,
+        en_validacion: mapa['en_validacion'] || 0,
+        rechazado: mapa['rechazado'] || 0,
+        en_correccion: mapa['en_correccion'] || 0,
+        pendiente: mapa['pendiente'] || 0,
+      },
+      tutoresActivos,
+      estudiantesActivos,
+    });
+  } catch (err) {
+    console.error('Error en dashboard:', err);
+    res.status(500).json({ message: 'Error al cargar las métricas.' });
+  }
+});
+
+// ============================================================
+// GESTIÓN DE PROYECTOS
+// ============================================================
+const ESTADOS_VALIDOS = ['pendiente', 'en_correccion', 'en_validacion', 'publicado', 'rechazado'];
+
+// Listar proyectos (con nombres de estudiante y tutor)
+router.get('/projects', async (req, res) => {
+  try {
+    const projects = await db.prepare(`
+      SELECT p.*,
+             s.nombre AS estudiante_nombre,
+             t.nombre AS tutor_nombre_asignado
       FROM projects p
-      JOIN users s ON s.id = p.estudiante_id
+      LEFT JOIN users s ON s.id = p.student_id
       LEFT JOIN users t ON t.id = p.tutor_id
-      ORDER BY p.updated_at DESC
-    `).all().map(row => ({
-      ...serializeProject(row),
-      estudianteNombre: row.estudiante_nombre,
-      tutorAsignadoNombre: row.tutor_asignado_nombre,
-    }));
-    response.json({ projects });
-  });
-
-  router.get('/users', (_request, response) => {
-    const users = db.prepare(`
-      SELECT id, nombre, cedula, email, telefono, trayecto, rol, activo, created_at
-      FROM users ORDER BY created_at DESC
+      ORDER BY p.created_at DESC
     `).all();
-    response.json({ users });
-  });
+    res.json({ projects });
+  } catch (err) {
+    console.error('Error listando proyectos:', err);
+    res.status(500).json({ message: 'Error al listar proyectos.' });
+  }
+});
 
-  router.patch('/users/:id/role', (request, response) => {
-    const role = String(request.body.rol || '');
-    if (!Object.values(ROLES).includes(role)) {
-      response.status(422).json({ message: 'Rol no válido.' });
-      return;
-    }
-    db.prepare(`
-      UPDATE users SET rol = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
-    `).run(role, Number(request.params.id));
-    const user = db.prepare(`
-      SELECT id, nombre, cedula, email, telefono, trayecto, rol, activo, created_at
-      FROM users WHERE id = ?
-    `).get(Number(request.params.id));
-    if (!user) {
-      response.status(404).json({ message: 'Usuario no encontrado.' });
-      return;
-    }
-    response.json({ user });
-  });
+// Listar tutores disponibles (para asignar/reasignar)
+router.get('/tutors', async (req, res) => {
+  try {
+    const tutores = await db
+      .prepare("SELECT id, nombre, email FROM users WHERE rol = 'tutor' ORDER BY nombre")
+      .all();
+    res.json({ tutores });
+  } catch (err) {
+    console.error('Error listando tutores:', err);
+    res.status(500).json({ message: 'Error al listar tutores.' });
+  }
+});
 
-  router.patch('/projects/:id/assign-tutor', (request, response) => {
-    const before = projectById(db, request.params.id);
-    const tutor = db.prepare(`
-      SELECT id, nombre FROM users
-      WHERE id = ? AND rol = 'tutor' AND activo = 1
-    `).get(Number(request.body.tutorId));
-    if (!before || !tutor) {
-      response.status(422).json({ message: 'Proyecto o tutor no válido.' });
-      return;
+// Cambiar estado de un proyecto
+router.patch('/projects/:id/status', async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const nuevoEstado = String(req.body.estado || '');
+    const motivo = String(req.body.motivo || '').trim();
+
+    if (!ESTADOS_VALIDOS.includes(nuevoEstado)) {
+      return res.status(422).json({ message: 'Estado no válido.' });
+    }
+    if (nuevoEstado === 'rechazado' && motivo.length < 5) {
+      return res.status(422).json({ message: 'El rechazo requiere un motivo (mín. 5 caracteres).' });
     }
 
-    db.prepare(`
-      UPDATE projects
-      SET tutor_id = ?, tutor_nombre = ?, updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `).run(tutor.id, tutor.nombre, before.id);
-    const after = projectById(db, before.id);
-    auditProject(db, request, {
-      projectId: before.id,
-      action: 'admin.tutor.assigned',
-      before,
-      after,
-      description: `Tutor asignado: ${tutor.nombre}.`,
-    });
-    response.json({ project: serializeProject(after) });
-  });
+    const project = await db.prepare('SELECT * FROM projects WHERE id = ?').get(id);
+    if (!project) return res.status(404).json({ message: 'Proyecto no encontrado.' });
 
-  router.put('/projects/:id/metadata', (request, response) => {
-    const before = projectById(db, request.params.id);
-    if (!before) {
-      response.status(404).json({ message: 'Proyecto no encontrado.' });
-      return;
-    }
-    db.prepare(`
+    await db.prepare(`
       UPDATE projects SET
-        titulo = ?, slug = ?, codigo_proyecto = ?, tipo_recurso = ?,
-        linea_investigacion = ?, autores_json = ?, tutor_nombre = ?,
-        anio_publicacion = ?, resumen = ?, updated_at = CURRENT_TIMESTAMP
+        estado = ?,
+        published_at = CASE WHEN ? = 'publicado' THEN CURRENT_TIMESTAMP ELSE published_at END,
+        rejected_at  = CASE WHEN ? = 'rechazado' THEN CURRENT_TIMESTAMP ELSE rejected_at END,
+        rejection_reason = CASE WHEN ? = 'rechazado' THEN ? ELSE rejection_reason END,
+        updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
-    `).run(
-      String(request.body.titulo || before.titulo).trim(),
-      request.body.slug ?? before.slug,
-      request.body.codigoProyecto ?? before.codigo_proyecto,
-      request.body.tipoRecurso ?? before.tipo_recurso,
-      request.body.lineaInvestigacion ?? before.linea_investigacion,
-      JSON.stringify(request.body.autores
-        ? parseAuthors(request.body.autores)
-        : JSON.parse(before.autores_json || '[]')),
-      request.body.tutorNombre ?? before.tutor_nombre,
-      request.body.anioPublicacion ?? before.anio_publicacion,
-      request.body.resumen ?? before.resumen,
-      before.id,
-    );
-    const after = projectById(db, before.id);
-    auditProject(db, request, {
-      projectId: before.id,
-      action: 'admin.metadata.updated',
-      before,
-      after,
-      description: 'El administrador realizó una edición avanzada.',
-    });
-    response.json({ project: serializeProject(after) });
-  });
+    `).run(nuevoEstado, nuevoEstado, nuevoEstado, nuevoEstado, motivo || null, id);
 
-  router.post(
-    '/projects/:id/documents/:type',
-    upload.single('pdf'),
-    async (request, response) => {
-      try {
-        const before = projectById(db, request.params.id);
-        if (!before || !['recurso', 'planilla'].includes(request.params.type)) {
-          await removeTemporaryFile(request.file);
-          response.status(422).json({ message: 'Proyecto o tipo documental no válido.' });
-          return;
-        }
-        if (FINAL_STATES.has(before.estado)) {
-          await removeTemporaryFile(request.file);
-          response.status(409).json({ message: 'No se pueden reemplazar documentos de un proyecto cerrado.' });
-          return;
-        }
-        if (!request.file) {
-          response.status(422).json({ message: 'Debes adjuntar un PDF.' });
-          return;
-        }
+    await db.prepare(`
+      INSERT INTO project_audits (project_id, actor_id, accion, estado_anterior, estado_nuevo, descripcion)
+      VALUES (?, ?, 'admin.estado_cambiado', ?, ?, ?)
+    `).run(id, req.user.id, project.estado, nuevoEstado, motivo || 'Cambio manual de estado por administrador.');
 
-        const document = await storeProjectDocument({
-          db,
-          dataDir,
-          documentsDir,
-          project: before,
-          type: request.params.type,
-          file: request.file,
-          userId: request.user.id,
-        });
-        const after = projectById(db, before.id);
-        auditProject(db, request, {
-          projectId: before.id,
-          action: `admin.document.${request.params.type}.uploaded`,
-          before,
-          after,
-          description: `El administrador cargó ${request.params.type}, versión ${document.version}.`,
-        });
-        response.status(201).json({ project: serializeProject(after), document });
-      } catch (error) {
-        await removeTemporaryFile(request.file);
-        sendRouteError(response, error);
-      }
-    },
-  );
+    const updated = await db.prepare('SELECT * FROM projects WHERE id = ?').get(id);
+    res.json({ project: updated });
+  } catch (err) {
+    console.error('Error cambiando estado:', err);
+    res.status(500).json({ message: 'Error al cambiar el estado del proyecto.' });
+  }
+});
 
-  router.post('/projects/:id/publish', (request, response) => {
-    try {
-      const before = projectById(db, request.params.id);
-      if (!before) {
-        response.status(404).json({ message: 'Proyecto no encontrado.' });
-        return;
-      }
-      assertTransition({
-        project: before,
-        to: PROJECT_STATES.PUBLISHED,
-        actorRole: request.user.rol,
-        requireDocuments: true,
-      });
-      db.prepare(`
-        UPDATE projects SET
-          estado = 'publicado', published_at = CURRENT_TIMESTAMP,
-          updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-      `).run(before.id);
-      const after = projectById(db, before.id);
-      auditProject(db, request, {
-        projectId: before.id,
-        action: 'admin.project.published',
-        before,
-        after,
-        description: 'El administrador validó, cerró y publicó el proyecto.',
-      });
-      response.json({ project: serializeProject(after) });
-    } catch (error) {
-      sendRouteError(response, error);
+// Asignar / reasignar tutor
+router.patch('/projects/:id/tutor', async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const tutorId = req.body.tutorId === null || req.body.tutorId === '' || req.body.tutorId === undefined
+      ? null
+      : Number(req.body.tutorId);
+
+    const project = await db.prepare('SELECT * FROM projects WHERE id = ?').get(id);
+    if (!project) return res.status(404).json({ message: 'Proyecto no encontrado.' });
+
+    let tutorNombre = null;
+    if (tutorId) {
+      const tutor = await db.prepare("SELECT nombre FROM users WHERE id = ? AND rol = 'tutor'").get(tutorId);
+      if (!tutor) return res.status(422).json({ message: 'Tutor no válido.' });
+      tutorNombre = tutor.nombre;
     }
-  });
 
-  // Devuelve el proyecto al ciclo cuando el administrador detecta ajustes pendientes.
-  router.post('/projects/:id/request-changes', (request, response) => {
-    try {
-      const before = projectById(db, request.params.id);
-      if (!before) {
-        response.status(404).json({ message: 'Proyecto no encontrado.' });
-        return;
-      }
-      assertTransition({
-        project: before,
-        to: PROJECT_STATES.CORRECTION,
-        actorRole: request.user.rol,
-      });
+    await db.prepare('UPDATE projects SET tutor_id = ?, tutor_nombre = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+      .run(tutorId, tutorNombre, id);
 
-      const observacion = String(request.body.observacion || '').trim();
-      if (observacion.length < 5) {
-        response.status(422).json({ message: 'Indica qué debe corregirse.' });
-        return;
-      }
+    await db.prepare(`
+      INSERT INTO project_audits (project_id, actor_id, accion, descripcion)
+      VALUES (?, ?, 'admin.tutor_asignado', ?)
+    `).run(id, req.user.id, tutorId ? `Tutor reasignado a: ${tutorNombre}` : 'Tutor removido del proyecto.');
 
-      db.transaction(() => {
-        if (before.tutor_id) {
-          db.prepare(`
-            INSERT INTO tutor_notes (project_id, tutor_id, tipo, comentario)
-            VALUES (?, ?, 'general', ?)
-          `).run(before.id, before.tutor_id, `[Administración] ${observacion}`);
-        }
-        db.prepare(`
-          UPDATE projects
-          SET estado = 'en_correccion', tutor_approved_at = NULL,
-              updated_at = CURRENT_TIMESTAMP
-          WHERE id = ?
-        `).run(before.id);
-      })();
+    const updated = await db.prepare(`
+      SELECT p.*, t.nombre AS tutor_nombre_asignado
+      FROM projects p LEFT JOIN users t ON t.id = p.tutor_id
+      WHERE p.id = ?
+    `).get(id);
+    res.json({ project: updated });
+  } catch (err) {
+    console.error('Error asignando tutor:', err);
+    res.status(500).json({ message: 'Error al asignar el tutor.' });
+  }
+});
 
-      const after = projectById(db, before.id);
-      auditProject(db, request, {
-        projectId: before.id,
-        action: 'admin.changes_requested',
-        before,
-        after,
-        description: observacion,
-      });
-      response.json({
-        project: serializeProject(after),
-        message: 'Proyecto devuelto al ciclo de corrección.',
-      });
-    } catch (error) {
-      sendRouteError(response, error);
+// Eliminar proyecto (con confirmación en el frontend)
+router.delete('/projects/:id', async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const project = await db.prepare('SELECT * FROM projects WHERE id = ?').get(id);
+    if (!project) return res.status(404).json({ message: 'Proyecto no encontrado.' });
+
+    // DELETE CASCADE elimina project_documents y tutor_notes automáticamente.
+    await db.prepare('DELETE FROM projects WHERE id = ?').run(id);
+
+    await db.prepare(`
+      INSERT INTO project_audits (project_id, actor_id, accion, descripcion)
+      VALUES (NULL, ?, 'admin.proyecto_eliminado', ?)
+    `).run(req.user.id, `Proyecto eliminado: ${project.titulo}`);
+
+    res.json({ message: 'Proyecto eliminado correctamente.' });
+  } catch (err) {
+    console.error('Error eliminando proyecto:', err);
+    res.status(500).json({ message: 'Error al eliminar el proyecto.' });
+  }
+});
+
+// ============================================================
+// GESTIÓN DE USUARIOS (estudiantes y tutores)
+// ============================================================
+
+// Listar usuarios (solo estudiante/tutor, nunca el admin)
+router.get('/users', async (req, res) => {
+  try {
+    const rol = req.query.rol; // opcional: 'estudiante' | 'tutor'
+    let users;
+    if (rol && ['estudiante', 'tutor'].includes(rol)) {
+      users = await db.prepare(
+        'SELECT id, nombre, email, telefono, cedula, rol, is_active, created_at FROM users WHERE rol = ? ORDER BY nombre'
+      ).all(rol);
+    } else {
+      users = await db.prepare(
+        "SELECT id, nombre, email, telefono, cedula, rol, is_active, created_at FROM users WHERE rol IN ('estudiante','tutor') ORDER BY nombre"
+      ).all();
     }
-  });
+    res.json({ users });
+  } catch (err) {
+    console.error('Error listando usuarios:', err);
+    res.status(500).json({ message: 'Error al listar usuarios.' });
+  }
+});
 
-  router.post('/projects/:id/reject', (request, response) => {
-    try {
-      const before = projectById(db, request.params.id);
-      if (!before) {
-        response.status(404).json({ message: 'Proyecto no encontrado.' });
-        return;
-      }
-      assertTransition({
-        project: before,
-        to: PROJECT_STATES.REJECTED,
-        actorRole: request.user.rol,
-      });
-      const reason = String(request.body.motivo || '').trim();
-      if (reason.length < 5) {
-        response.status(422).json({ message: 'Indica un motivo de rechazo.' });
-        return;
-      }
-      db.prepare(`
-        UPDATE projects SET
-          estado = 'rechazado', rejected_at = CURRENT_TIMESTAMP,
-          rejection_reason = ?, updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-      `).run(reason, before.id);
-      const after = projectById(db, before.id);
-      auditProject(db, request, {
-        projectId: before.id,
-        action: 'admin.project.rejected',
-        before,
-        after,
-        description: reason,
-      });
-      response.json({ project: serializeProject(after) });
-    } catch (error) {
-      sendRouteError(response, error);
+// Alternar is_active (activar / desactivar)
+router.patch('/users/:id/toggle-active', async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const user = await db.prepare('SELECT * FROM users WHERE id = ?').get(id);
+    if (!user) return res.status(404).json({ message: 'Usuario no encontrado.' });
+    if (user.rol === 'administrador') {
+      return res.status(422).json({ message: 'No se puede desactivar al administrador.' });
     }
-  });
 
-  router.get('/projects/:id/documents/:type', (request, response) => {
-    const project = projectById(db, request.params.id);
-    if (!project) {
-      response.status(404).json({ message: 'Proyecto no encontrado.' });
-      return;
+    const nuevoEstado = !user.is_active;
+    await db.prepare('UPDATE users SET is_active = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+      .run(nuevoEstado, id);
+
+    await db.prepare(`
+      INSERT INTO project_audits (project_id, actor_id, accion, descripcion)
+      VALUES (NULL, ?, 'admin.usuario_toggle', ?)
+    `).run(req.user.id, `${nuevoEstado ? 'Activado' : 'Desactivado'} usuario: ${user.nombre}`);
+
+    const updated = await db.prepare('SELECT id, nombre, rol, is_active FROM users WHERE id = ?').get(id);
+    res.json({ user: updated });
+  } catch (err) {
+    console.error('Error toggle activo:', err);
+    res.status(500).json({ message: 'Error al activar/desactivar el usuario.' });
+  }
+});
+
+// Cambiar rol (SOLO entre estudiante y tutor; NUNCA administrador)
+router.patch('/users/:id/role', async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const nuevoRol = String(req.body.rol || '');
+    const user = await db.prepare('SELECT * FROM users WHERE id = ?').get(id);
+    if (!user) return res.status(404).json({ message: 'Usuario no encontrado.' });
+
+    // NUNCA crear/eliminar administradores desde la UI.
+    if (nuevoRol === 'administrador' || user.rol === 'administrador') {
+      return res.status(403).json({ message: 'No se puede modificar el rol administrador.' });
     }
-    const document = currentDocument(db, project.id, request.params.type);
-    if (!document) {
-      response.status(404).json({ message: 'Documento no encontrado.' });
-      return;
+    // Solo se permite alternar entre estudiante y tutor.
+    if (!['estudiante', 'tutor'].includes(nuevoRol)) {
+      return res.status(422).json({ message: 'Rol no permitido. Solo estudiante o tutor.' });
     }
-    sendPrivateDocument({
-      response,
-      document,
-      dataDir,
-      download: request.query.download === '1',
-    });
-  });
 
-  router.get('/audit', (_request, response) => {
-    const audits = db.prepare(`
-      SELECT a.*, u.nombre AS actor_nombre, u.rol AS actor_rol,
-             p.titulo AS project_title
-      FROM project_audits a
-      JOIN users u ON u.id = a.actor_id
-      LEFT JOIN projects p ON p.id = a.project_id
-      ORDER BY a.created_at ASC, a.id ASC
-    `).all();
-    response.json({ audits });
-  });
+    await db.prepare('UPDATE users SET rol = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+      .run(nuevoRol, id);
 
-  return router;
-}
+    await db.prepare(`
+      INSERT INTO project_audits (project_id, actor_id, accion, descripcion)
+      VALUES (NULL, ?, 'admin.rol_cambiado', ?)
+    `).run(req.user.id, `Rol de ${user.nombre} cambiado de ${user.rol} a ${nuevoRol}.`);
+
+    const updated = await db.prepare('SELECT id, nombre, rol, is_active FROM users WHERE id = ?').get(id);
+    res.json({ user: updated });
+  } catch (err) {
+    console.error('Error cambiando rol:', err);
+    res.status(500).json({ message: 'Error al cambiar el rol del usuario.' });
+  }
+});
+
+export default router;

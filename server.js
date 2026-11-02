@@ -11,6 +11,9 @@ import jwt from 'jsonwebtoken';
 import multer from 'multer';
 import pg from 'pg';
 
+// ✏️ Cambio 1: Importar rutas del panel de administración
+import adminRoutes from './server/routes/admin.routes.js';
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const port = Number(process.env.PORT || 3000);
@@ -162,7 +165,15 @@ await seedAdmin();
 // ---------- Middlewares ----------
 app.set('trust proxy', 1);
 app.use(helmet({ contentSecurityPolicy: false }));
-app.use(cors({ origin: true, methods: ['GET','POST','PUT','PATCH','DELETE'], allowedHeaders: ['Content-Type','Authorization'] }));
+app.use(cors({
+  origin: [
+    'http://localhost:3000',
+    'http://localhost:5173',
+    'https://brianacdb.netlify.app',
+  ],
+  methods: ['GET','POST','PUT','PATCH','DELETE'],
+  allowedHeaders: ['Content-Type','Authorization'],
+}));
 app.use(express.json({ limit: '256kb' }));
 
 const authLimiter = rateLimit({ windowMs: 15 * 60_000, limit: 30, message: { message: 'Demasiados intentos.' } });
@@ -183,6 +194,10 @@ async function requireAuth(req, res, next) {
 }
 const allow = (...roles) => (req, res, next) => roles.includes(req.user.role)
   ? next() : res.status(403).json({ message: 'No tienes permiso para esta acción.' });
+
+// ✏️ Cambio 2: Montar las rutas de admin y la vista HTML
+app.use('/api/admin', adminRoutes);
+app.get('/admin', (req, res) => res.sendFile(path.join(__dirname, 'admin.html')));
 
 // ---------- Salud y autenticación ----------
 app.get('/api/health', async (_req, res) => {
@@ -217,12 +232,20 @@ app.post(['/api/register','/api/auth/register'], authLimiter, async (req, res) =
   res.status(201).json({ message: `Cuenta de ${role} creada.`, token: tokenFor(user), role: user.role, user: publicUser(user) });
 });
 
+// ✏️ Cambio 3: Bloquear el login público para administradores
 app.post(['/api/login','/api/auth/login'], authLimiter, async (req, res) => {
   const correo = String(req.body.email || req.body.correo || '').trim().toLowerCase();
   const user = await one('SELECT * FROM users WHERE correo = $1 AND activo = TRUE', [correo]);
   if (!user || !(await bcrypt.compare(String(req.body.password || ''), user.password))) {
     fail(401, 'Correo o contraseña incorrectos.');
   }
+
+  if (user.role === ROLES.ADMIN) {
+    return res.status(403).json({
+      message: 'Los administradores deben usar el acceso de administración (/admin).',
+    });
+  }
+
   res.json({ token: tokenFor(user), role: user.role, user: publicUser(user) });
 });
 
@@ -238,9 +261,6 @@ app.post('/api/auth/admin-action/change', authLimiter, requireAuth, allow(ROLES.
   if (next.length < 8) fail(422, 'La contraseña debe tener al menos 8 caracteres.');
   await query('UPDATE users SET password = $1, updated_at = NOW() WHERE id = $2', [await bcrypt.hash(next, 12), req.user.id]);
   res.json({ message: 'Contraseña actualizada.' });
-});
-app.get('/api/admin/users', requireAuth, allow(ROLES.ADMIN), async (_req, res) => {
-  res.json({ users: (await many('SELECT * FROM users ORDER BY created_at DESC')).map(publicUser) });
 });
 
 // ---------- Documentos ----------
@@ -391,63 +411,6 @@ tutor.post('/projects/:id/approve', (req, res, next) => {
   tutor.handle(req, res, next);
 });
 app.use('/api/tutor', tutor);
-
-// ---------- Administrador ----------
-const admin = express.Router();
-admin.use(requireAuth, allow(ROLES.ADMIN));
-admin.get('/projects', async (_req, res) => {
-  const rows = await many(
-    `SELECT p.*, s.nombre AS student_name, t.nombre AS tutor_account_name
-     FROM projects p JOIN users s ON s.id=p.student_id LEFT JOIN users t ON t.id=p.tutor_id
-     ORDER BY p.updated_at DESC`);
-  res.json({ projects: rows.map(r => ({ ...serializeProject(r), estudianteNombre: r.student_name, tutorAsignado: r.tutor_account_name })) });
-});
-admin.get('/projects/:id/documents/:kind', async (req, res) => {
-  const p = await projectById(req.params.id);
-  if (!p) fail(404, 'Proyecto no encontrado.');
-  await sendDocument(req, res, p);
-});
-admin.post('/projects/:id/publish', async (req, res) => {
-  const before = await projectById(req.params.id);
-  if (!before) fail(404, 'Proyecto no encontrado.');
-  if (before.status !== STATES.VALIDATION) fail(409, 'El proyecto debe estar aprobado por el tutor.');
-  if (!before.file_url || !before.signed_form_url) fail(422, 'Faltan documentos obligatorios.');
-  const after = await one(`UPDATE projects SET status='publicado', published_at=NOW(), updated_at=NOW() WHERE id=$1 RETURNING *`, [before.id]);
-  await audit(req, before.id, 'admin.published', before, after, 'Proyecto publicado.');
-  res.json({ project: serializeProject(after) });
-});
-admin.post('/projects/:id/request-changes', async (req, res) => {
-  const before = await projectById(req.params.id);
-  if (!before) fail(404, 'Proyecto no encontrado.');
-  if (before.status !== STATES.VALIDATION) fail(409, 'Solo se devuelven proyectos en validación.');
-  const comment = String(req.body.observacion || '').trim();
-  if (comment.length < 5) fail(422, 'Indica qué debe corregirse.');
-  await query('INSERT INTO tutor_notes (project_id,author_id,kind,comment) VALUES ($1,$2,$3,$4)',
-    [before.id, req.user.id, 'general', `[Administración] ${comment}`]);
-  const after = await one(
-    `UPDATE projects SET status='en_correccion', tutor_approved_at=NULL, updated_at=NOW() WHERE id=$1 RETURNING *`, [before.id]);
-  await audit(req, before.id, 'admin.changes_requested', before, after, comment);
-  res.json({ project: serializeProject(after) });
-});
-admin.post('/projects/:id/reject', async (req, res) => {
-  const before = await projectById(req.params.id);
-  if (!before) fail(404, 'Proyecto no encontrado.');
-  if (before.status === STATES.PUBLISHED) fail(409, 'Un proyecto publicado no puede rechazarse.');
-  const reason = String(req.body.motivo || '').trim();
-  if (reason.length < 5) fail(422, 'Indica el motivo del rechazo.');
-  const after = await one(
-    `UPDATE projects SET status='rechazado', rejected_at=NOW(), rejection_reason=$1, updated_at=NOW()
-     WHERE id=$2 RETURNING *`, [reason, before.id]);
-  await audit(req, before.id, 'admin.rejected', before, after, reason);
-  res.json({ project: serializeProject(after) });
-});
-admin.get('/audit', async (_req, res) => {
-  res.json({ audits: await many(
-    `SELECT a.*, u.nombre AS actor_name, p.title AS project_title FROM project_audits a
-     JOIN users u ON u.id=a.actor_id LEFT JOIN projects p ON p.id=a.project_id
-     ORDER BY a.created_at ASC`) });
-});
-app.use('/api/admin', admin);
 
 // Acceso a documentos con permiso por rol.
 app.get('/api/projects/:id/documents/:kind', requireAuth, async (req, res) => {

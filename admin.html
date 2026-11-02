@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BRIANA · Panel de Administración</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" />
+  <style>
+    :root {
+      --bg:#0b1120; --surface:#10192d; --surface2:#16233d; --border:#1e293b;
+      --text:#e2e8f0; --dim:#94a3b8; --mute:#64748b;
+      --blue:#3b82f6; --cyan:#22d3ee; --green:#10b981; --red:#ef4444; --amber:#f59e0b; --violet:#8b5cf6;
+    }
+    * { box-sizing:border-box; margin:0; padding:0; }
+    body { font-family:'Inter',sans-serif; background:var(--bg); color:var(--text); min-height:100vh; }
+    .display { font-family:'Space Grotesk',sans-serif; }
+    .mono { font-family:'Space Grotesk',monospace; }
+
+    /* LOGIN */
+    #loginScreen { display:flex; align-items:center; justify-content:center; min-height:100vh; padding:24px; }
+    .login-card { width:100%; max-width:400px; background:var(--surface); border:1px solid var(--border); border-radius:20px; padding:40px 34px; }
+    .login-logo { width:64px; height:64px; border-radius:16px; margin:0 auto 18px; background:linear-gradient(135deg,var(--blue),var(--cyan)); display:flex; align-items:center; justify-content:center; font-size:28px; color:#fff; }
+    .login-title { text-align:center; font-family:'Space Grotesk'; font-size:24px; font-weight:700; }
+    .login-sub { text-align:center; color:var(--dim); font-size:13px; margin:8px 0 26px; }
+    .field { margin-bottom:16px; }
+    .field label { display:block; font-size:11px; text-transform:uppercase; letter-spacing:1px; color:var(--dim); margin-bottom:6px; font-weight:600; }
+    .inp { width:100%; background:var(--surface2); border:1px solid var(--border); border-radius:10px; padding:12px 14px; color:var(--text); font-family:inherit; font-size:14px; outline:none; }
+    .inp:focus { border-color:var(--blue); }
+    .btn { width:100%; padding:13px; border:none; border-radius:11px; background:linear-gradient(135deg,var(--blue),var(--cyan)); color:#fff; font-family:inherit; font-weight:700; font-size:14px; cursor:pointer; }
+    .btn:hover { opacity:.92; }
+    .login-err { display:none; text-align:center; color:#fca5a5; font-size:13px; margin-top:14px; }
+
+    /* APP */
+    #appScreen { display:none; min-height:100vh; }
+    .topbar { height:64px; background:var(--surface); border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; padding:0 28px; position:sticky; top:0; z-index:10; }
+    .topbar .left { display:flex; align-items:center; gap:14px; }
+    .topbar .logo { width:38px; height:38px; border-radius:10px; background:linear-gradient(135deg,var(--blue),var(--cyan)); display:flex; align-items:center; justify-content:center; color:#fff; font-size:20px; font-weight:800; }
+    .topbar h1 { font-family:'Space Grotesk'; font-size:19px; font-weight:700; }
+    .topbar .admin-badge { font-size:10px; color:var(--violet); border:1px solid var(--violet); padding:2px 8px; border-radius:20px; margin-left:4px; }
+    .logout { background:transparent; border:1px solid var(--border); color:var(--dim); padding:9px 14px; border-radius:9px; cursor:pointer; font-family:inherit; font-size:13px; display:flex; align-items:center; gap:7px; }
+    .logout:hover { border-color:var(--red); color:var(--red); }
+
+    .container { max-width:1200px; margin:0 auto; padding:28px 24px; }
+
+    /* TABS */
+    .tabs { display:flex; gap:8px; margin-bottom:24px; }
+    .tab { padding:11px 20px; border-radius:10px; background:var(--surface); border:1px solid var(--border); color:var(--dim); cursor:pointer; font-family:inherit; font-size:14px; font-weight:600; display:flex; align-items:center; gap:8px; }
+    .tab.active { background:linear-gradient(135deg,var(--blue),var(--cyan)); color:#fff; border-color:transparent; }
+
+    /* METRICS */
+    .metrics { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:16px; margin-bottom:28px; }
+    .card { background:var(--surface); border:1px solid var(--border); border-radius:16px; padding:20px; }
+    .card .label { font-size:12px; color:var(--dim); font-weight:600; display:flex; align-items:center; gap:8px; }
+    .card .num { font-family:'Space Grotesk'; font-size:34px; font-weight:700; margin-top:10px; }
+    .card.total .num { color:var(--cyan); }
+    .card.pub .num { color:var(--green); }
+    .card.val .num { color:var(--amber); }
+    .card.rej .num { color:var(--red); }
+    .card.tut .num { color:var(--violet); }
+    .card.est .num { color:var(--blue); }
+
+    .panel { background:var(--surface); border:1px solid var(--border); border-radius:16px; padding:22px; }
+    .panel h2 { font-family:'Space Grotesk'; font-size:18px; margin-bottom:18px; display:flex; align-items:center; gap:10px; }
+    .panel h2 i { color:var(--cyan); }
+
+    /* TABLE */
+    .table-wrap { overflow-x:auto; border:1px solid var(--border); border-radius:12px; }
+    table { width:100%; border-collapse:collapse; font-size:13px; min-width:720px; }
+    thead th { text-align:left; padding:13px 14px; background:var(--surface2); color:var(--dim); font-size:11px; text-transform:uppercase; letter-spacing:.5px; border-bottom:1px solid var(--border); white-space:nowrap; }
+    tbody td { padding:13px 14px; border-bottom:1px solid var(--border); vertical-align:middle; }
+    tbody tr:last-child td { border-bottom:none; }
+    tbody tr:hover { background:rgba(59,130,246,.04); }
+    .titulo-cell { max-width:280px; }
+    .titulo-cell .t { font-weight:600; }
+    .codigo { font-family:'Space Grotesk'; color:var(--cyan); font-size:12px; }
+    .nombre-user { font-weight:600; }
+
+    /* BADGES */
+    .badge { display:inline-flex; align-items:center; gap:5px; padding:4px 11px; border-radius:20px; font-size:11px; font-weight:700; white-space:nowrap; }
+    .b-pub { background:rgba(16,185,129,.15); color:#34d399; }
+    .b-val { background:rgba(245,158,11,.15); color:#fbbf24; }
+    .b-rej { background:rgba(239,68,68,.15); color:#f87171; }
+    .b-cor { background:rgba(139,92,246,.15); color:#a78bfa; }
+    .b-pend { background:rgba(148,163,184,.15); color:#cbd5e1; }
+    .rol-badge { padding:3px 10px; border-radius:6px; font-size:11px; font-weight:700; text-transform:uppercase; }
+    .r-tut { background:rgba(139,92,246,.15); color:#a78bfa; }
+    .r-est { background:rgba(59,130,246,.15); color:#60a5fa; }
+    .active-on { color:#34d399; font-size:11px; font-weight:700; }
+    .active-off { color:#f87171; font-size:11px; font-weight:700; }
+
+    /* ACTIONS */
+    .actions { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+    .act { padding:7px 11px; border-radius:8px; border:1px solid var(--border); background:var(--surface2); color:var(--dim); cursor:pointer; font-family:inherit; font-size:12px; font-weight:600; display:inline-flex; align-items:center; gap:6px; white-space:nowrap; }
+    .act:hover { color:#fff; }
+    .act.pub:hover { border-color:var(--green); color:var(--green); }
+    .act.val:hover { border-color:var(--amber); color:var(--amber); }
+    .act.rej:hover { border-color:var(--red); color:var(--red); }
+    .act.del:hover { border-color:var(--red); color:var(--red); }
+    select.act { padding:7px 8px; max-width:150px; }
+    .toggle { width:46px; height:26px; border-radius:20px; background:var(--surface2); border:1px solid var(--border); cursor:pointer; position:relative; }
+    .toggle::after { content:''; position:absolute; width:18px; height:18px; border-radius:50%; background:var(--dim); top:3px; left:3px; transition:.2s; }
+    .toggle.on { background:rgba(16,185,129,.3); border-color:var(--green); }
+    .toggle.on::after { left:23px; background:var(--green); }
+
+    .toast-wrap { position:fixed; right:24px; bottom:24px; display:flex; flex-direction:column; gap:10px; z-index:100; }
+    .toast { background:var(--surface); border:1px solid var(--border); border-left:4px solid var(--green); padding:14px 18px; border-radius:10px; font-size:13px; min-width:260px; box-shadow:0 10px 30px rgba(0,0,0,.5); }
+    .toast.err { border-left-color:var(--red); }
+    .empty { text-align:center; padding:40px; color:var(--mute); }
+    .empty i { font-size:36px; margin-bottom:12px; }
+  </style>
+</head>
+<body>
+  <!-- ================= LOGIN ADMIN ================= -->
+  <div id="loginScreen">
+    <div class="login-card">
+      <div class="login-logo"><i class="fa-solid fa-shield-halved"></i></div>
+      <h1 class="login-title">BRIANA</h1>
+      <p class="login-sub">Acceso exclusivo de administración</p>
+      <div class="field">
+        <label>Correo electrónico</label>
+        <input type="email" class="inp" id="loginEmail" placeholder="admin@briana.com" autocomplete="username" />
+      </div>
+      <div class="field">
+        <label>Contraseña</label>
+        <div style="position:relative">
+          <input type="password" class="inp" id="loginPass" placeholder="••••••••" autocomplete="current-password" style="padding-right:44px" />
+          <button type="button" id="loginToggle" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);background:transparent;border:none;color:var(--dim);cursor:pointer"><i class="fa-solid fa-eye"></i></button>
+        </div>
+      </div>
+      <button class="btn" id="loginBtn"><i class="fa-solid fa-right-to-bracket"></i> Iniciar sesión</button>
+      <p class="login-err" id="loginErr"></p>
+    </div>
+  </div>
+
+  <!-- ================= APP ================= -->
+  <div id="appScreen">
+    <div class="topbar">
+      <div class="left">
+        <div class="logo">B</div>
+        <div>
+          <h1>BRIANA <span class="admin-badge">ADMIN</span></h1>
+        </div>
+      </div>
+      <button class="logout" id="logoutBtn"><i class="fa-solid fa-right-from-bracket"></i> Cerrar sesión</button>
+    </div>
+
+    <div class="container">
+      <div class="tabs">
+        <button class="tab active" data-tab="dashboard"><i class="fa-solid fa-chart-pie"></i> Dashboard</button>
+        <button class="tab" data-tab="projects"><i class="fa-solid fa-folder-open"></i> Proyectos</button>
+        <button class="tab" data-tab="users"><i class="fa-solid fa-users"></i> Usuarios</button>
+      </div>
+
+      <!-- DASHBOARD -->
+      <section id="tab-dashboard">
+        <div class="metrics" id="metrics"></div>
+      </section>
+
+      <!-- PROYECTOS -->
+      <section id="tab-projects" style="display:none">
+        <div class="panel">
+          <h2><i class="fa-solid fa-folder-open"></i> Gestión de Proyectos</h2>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Título</th><th>Código</th><th>Estudiante</th><th>Tutor</th>
+                  <th>Estado</th><th>Acciones</th>
+                </tr>
+              </thead>
+              <tbody id="projectsBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- USUARIOS -->
+      <section id="tab-users" style="display:none">
+        <div class="panel">
+          <h2><i class="fa-solid fa-users"></i> Gestión de Usuarios</h2>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Nombre</th><th>Correo</th><th>Rol</th><th>Activo</th><th>Acciones</th>
+                </tr>
+              </thead>
+              <tbody id="usersBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <div class="toast-wrap" id="toastWrap"></div>
+
+  <script>
+    // ============ CONFIG ============
+    // Si el panel y el backend están en el MISMO dominio (Render), deja '' (relativo).
+    // Si el panel está en Netlify y el backend en Render, pon la URL completa.
+    const API_BASE = ''; // ej: 'https://brianasandboxv1-1.onrender.com'
+
+    const token = () => localStorage.getItem('briana_admin_token');
+
+    // ============ AUTH ============
+    const loginScreen = document.getElementById('loginScreen');
+    const appScreen = document.getElementById('appScreen');
+
+    function showApp() { loginScreen.style.display = 'none'; appScreen.style.display = 'block'; loadDashboard(); }
+
+    function showLogin() {
+      localStorage.removeItem('briana_admin_token');
+      appScreen.style.display = 'none';
+      loginScreen.style.display = 'flex';
+    }
+
+    // Si ya hay token, entrar directo.
+    if (token()) {
+      api('/admin/dashboard').then((d) => { showApp(); renderMetrics(d); }).catch(() => showLogin());
+    }
+
+    document.getElementById('loginToggle').onclick = () => {
+      const p = document.getElementById('loginPass');
+      p.type = p.type === 'password' ? 'text' : 'password';
+    };
+
+    async function doLogin() {
+      const email = document.getElementById('loginEmail').value.trim();
+      const pass = document.getElementById('loginPass').value;
+      const errEl = document.getElementById('loginErr');
+      errEl.style.display = 'none';
+      try {
+        const r = await fetch(API_BASE + '/api/admin/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, password: pass }),
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.message || 'Error de login.');
+        localStorage.setItem('briana_admin_token', data.token);
+        localStorage.setItem('briana_admin_user', JSON.stringify(data.user));
+        document.getElementById('loginPass').value = '';
+        showApp();
+      } catch (e) {
+        errEl.textContent = e.message;
+        errEl.style.display = 'block';
+      }
+    }
+    document.getElementById('loginBtn').onclick = doLogin;
+    document.getElementById('loginPass').addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin(); });
+    document.getElementById('logoutBtn').onclick = showLogin;
+
+    // ============ API HELPER ============
+    async function api(path, options = {}) {
+      const res = await fetch(API_BASE + '/api' + path, {
+        ...options,
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token() ? { Authorization: 'Bearer ' + token() } : {}),
+          ...(options.headers || {}),
+        },
+      });
+      if (res.status === 401) { showLogin(); throw new Error('Sesión expirada.'); }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.message || 'Error ' + res.status);
+      return data;
+    }
+
+    // ============ TOAST ============
+    function toast(msg, type = 'ok') {
+      const wrap = document.getElementById('toastWrap');
+      const el = document.createElement('div');
+      el.className = 'toast ' + (type === 'err' ? 'err' : '');
+      el.textContent = msg;
+      wrap.appendChild(el);
+      setTimeout(() => el.remove(), 3500);
+    }
+
+    // ============ TABS ============
+    document.querySelectorAll('.tab').forEach((t) => {
+      t.onclick = () => {
+        document.querySelectorAll('.tab').forEach((x) => x.classList.remove('active'));
+        t.classList.add('active');
+        const which = t.dataset.tab;
+        ['dashboard', 'projects', 'users'].forEach((s) => {
+          document.getElementById('tab-' + s).style.display = s === which ? 'block' : 'none';
+        });
+        if (which === 'dashboard') loadDashboard();
+        if (which === 'projects') loadProjects();
+        if (which === 'users') loadUsers();
+      };
+    });
+
+    // ============ DASHBOARD ============
+    async function loadDashboard() {
+      try {
+        const d = await api('/admin/dashboard');
+        renderMetrics(d);
+      } catch (e) { /* login expired handled in api() */ }
+    }
+    function renderMetrics(d) {
+      const cards = [
+        { cls: 'total', label: 'Total Proyectos', icon: 'fa-folder-open', num: d.totalProyectos },
+        { cls: 'pub', label: 'Publicados', icon: 'fa-circle-check', num: d.porEstado.publicado },
+        { cls: 'val', label: 'En Validación', icon: 'fa-hourglass-half', num: d.porEstado.en_validacion },
+        { cls: 'rej', label: 'Rechazados', icon: 'fa-circle-xmark', num: d.porEstado.rechazado },
+        { cls: 'tut', label: 'Tutores Activos', icon: 'fa-user-graduate', num: d.tutoresActivos },
+        { cls: 'est', label: 'Estudiantes Activos', icon: 'fa-user', num: d.estudiantesActivos },
+      ];
+      document.getElementById('metrics').innerHTML = cards
+        .map((c) => `<div class="card ${c.cls}"><div class="label"><i class="fa-solid ${c.icon}"></i> ${c.label}</div><div class="num">${c.num}</div></div>`)
+        .join('');
+    }
+
+    // ============ PROYECTOS ============
+    let tutoresList = [];
+    function estadoBadge(estado) {
+      const map = {
+        publicado: ['b-pub', 'Publicado'],
+        en_validacion: ['b-val', 'En Validación'],
+        rechazado: ['b-rej', 'Rechazado'],
+        en_correccion: ['b-cor', 'En Corrección'],
+        pendiente: ['b-pend', 'Pendiente'],
+      };
+      const [cls, label] = map[estado] || ['b-pend', estado];
+      return `<span class="badge ${cls}">${label}</span>`;
+    }
+
+    async function loadProjects() {
+      try {
+        const [p, t] = await Promise.all([api('/admin/projects'), api('/admin/tutors')]);
+        tutoresList = t.tutores;
+        const body = document.getElementById('projectsBody');
+        if (!p.projects.length) {
+          body.innerHTML = `<tr><td colspan="6"><div class="empty"><i class="fa-regular fa-folder"></i><div>No hay proyectos registrados.</div></div></td></tr>`;
+          return;
+        }
+        body.innerHTML = p.projects
+          .map((p) => {
+            const tutorOpts = '<option value="">— Sin tutor —</option>' + tutoresList.map((t) => `<option value="${t.id}" ${p.tutor_id === t.id ? 'selected' : ''}>${t.nombre}</option>`).join('');
+            return `<tr>
+              <td class="titulo-cell"><div class="t">${esc(p.titulo)}</div></td>
+              <td class="codigo">${esc(p.codigo_proyecto || '—')}</td>
+              <td>${esc(p.estudiante_nombre || '—')}</td>
+              <td><select class="act" data-tutor-sel="${p.id}">${tutorOpts}</select></td>
+              <td>${estadoBadge(p.estado)}</td>
+              <td>
+                <div class="actions">
+                  ${p.estado !== 'publicado' ? `<button class="act pub" data-act="pub" data-id="${p.id}"><i class="fa-solid fa-circle-check"></i> Publicar</button>` : ''}
+                  ${p.estado !== 'en_validacion' && p.estado !== 'publicado' ? `<button class="act val" data-act="val" data-id="${p.id}"><i class="fa-solid fa-hourglass-half"></i> Validar</button>` : ''}
+                  ${p.estado !== 'rechazado' && p.estado !== 'publicado' ? `<button class="act rej" data-act="rej" data-id="${p.id}"><i class="fa-solid fa-circle-xmark"></i> Rechazar</button>` : ''}
+                  <button class="act del" data-act="del" data-id="${p.id}"><i class="fa-solid fa-trash"></i></button>
+                </div>
+              </td>
+            </tr>`;
+          })
+          .join('');
+
+        // Eventos de estado
+        body.querySelectorAll('[data-act]').forEach((btn) => {
+          btn.onclick = () => handleProjectAction(btn.dataset.act, Number(btn.dataset.id));
+        });
+        // Eventos de tutor
+        body.querySelectorAll('[data-tutor-sel]').forEach((sel) => {
+          sel.onchange = async () => {
+            try {
+              await api('/admin/projects/' + sel.dataset.tutorSel + '/tutor', { method: 'PATCH', body: JSON.stringify({ tutorId: sel.value || null }) });
+              toast('Tutor actualizado.');
+            } catch (e) { toast(e.message, 'err'); }
+          };
+        });
+      } catch (e) { toast(e.message, 'err'); }
+    }
+
+    async function handleProjectAction(action, id) {
+      let estado = null, motivo = null;
+      if (action === 'pub') estado = 'publicado';
+      if (action === 'val') estado = 'en_validacion';
+      if (action === 'del') {
+        if (!confirm('¿Eliminar este proyecto de forma permanente?')) return;
+        try { await api('/admin/projects/' + id, { method: 'DELETE' }); toast('Proyecto eliminado.'); loadProjects(); }
+        catch (e) { toast(e.message, 'err'); }
+        return;
+      }
+      if (action === 'rej') {
+        motivo = prompt('Motivo del rechazo (mín. 5 caracteres):');
+        if (!motivo || motivo.trim().length < 5) { toast('El rechazo requiere un motivo.', 'err'); return; }
+        estado = 'rechazado';
+      }
+      try {
+        await api('/admin/projects/' + id + '/status', { method: 'PATCH', body: JSON.stringify({ estado, motivo }) });
+        toast('Estado actualizado a: ' + estado);
+        loadProjects();
+      } catch (e) { toast(e.message, 'err'); }
+    }
+
+    // ============ USUARIOS ============
+    async function loadUsers() {
+      try {
+        const { users } = await api('/admin/users');
+        const body = document.getElementById('usersBody');
+        if (!users.length) {
+          body.innerHTML = `<tr><td colspan="5"><div class="empty"><i class="fa-regular fa-user"></i><div>No hay usuarios registrados.</div></div></td></tr>`;
+          return;
+        }
+        body.innerHTML = users
+          .map((u) => {
+            const rolCls = u.rol === 'tutor' ? 'r-tut' : 'r-est';
+            const alt = u.rol === 'tutor' ? 'estudiante' : 'tutor';
+            return `<tr>
+              <td class="nombre-user">${esc(u.nombre)}</td>
+              <td>${esc(u.email)}</td>
+              <td><span class="rol-badge ${rolCls}">${u.rol}</span></td>
+              <td><span class="${u.is_active ? 'active-on' : 'active-off'}"><i class="fa-solid ${u.is_active ? 'fa-circle-check' : 'fa-circle-xmark'}"></i> ${u.is_active ? 'Activo' : 'Inactivo'}</span></td>
+              <td>
+                <div class="actions">
+                  <div class="toggle ${u.is_active ? 'on' : ''}" data-toggle="${u.id}" title="Activar/Desactivar"></div>
+                  <button class="act" data-role="${u.id}" data-nuevo="${alt}" title="Cambiar a ${alt}"><i class="fa-solid fa-rotate"></i> a ${alt}</button>
+                </div>
+              </td>
+            </tr>`;
+          })
+          .join('');
+
+        body.querySelectorAll('[data-toggle]').forEach((t) => {
+          t.onclick = async () => {
+            try {
+              const { user } = await api('/admin/users/' + t.dataset.toggle + '/toggle-active', { method: 'PATCH', body: '{}' });
+              t.classList.toggle('on', user.is_active);
+              toast(user.is_active ? 'Usuario activado.' : 'Usuario desactivado.');
+              loadUsers();
+            } catch (e) { toast(e.message, 'err'); }
+          };
+        });
+        body.querySelectorAll('[data-role]').forEach((b) => {
+          b.onclick = async () => {
+            if (!confirm(`¿Cambiar el rol de este usuario a "${b.dataset.nuevo}"?`)) return;
+            try {
+              await api('/admin/users/' + b.dataset.role + '/role', { method: 'PATCH', body: JSON.stringify({ rol: b.dataset.nuevo }) });
+              toast('Rol actualizado a: ' + b.dataset.nuevo);
+              loadUsers();
+            } catch (e) { toast(e.message, 'err'); }
+          };
+        });
+      } catch (e) { toast(e.message, 'err'); }
+    }
+
+    function esc(s) { return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+  </script>
+</body>
+</html>
